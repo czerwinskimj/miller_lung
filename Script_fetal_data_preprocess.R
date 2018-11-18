@@ -574,9 +574,6 @@ pdf("Plot_cmOverlap_combinedVitro2Vivo_cellTypeMarker_expression_quantile-2.pdf"
 heatmap.2(normed.expr,trace="none",density.info="none",dendrogram="none",scale="none",col=g.colors,Rowv=NA, Colv=NA)
 dev.off()
 
-
-
-
 spring.file <- "epi_by_sample/Plot_age_and_location_Info_along_SPRING_merged_cm_scaled_regressed_k50.png"
 age.idx <- rep(NA, ncol(hvg.info))
 age.idx[grep("D145", hvg.info["orig.ident",])] <- "Day145"
@@ -598,4 +595,80 @@ cplotFeature(spring.coor, values=hvg.info["orig.ident",], knn.pairs=knn.idx, xla
 legend("bottomright", text.col=sample.cols, legend=unique(hvg.info["orig.ident",]), bty="n", cex = 4)
 for(x in unique(hvg.info["orig.ident",]))
 	plotFeature(spring.coor, values=hvg.info["orig.ident",], knn.pairs=knn.idx, xlab="", ylab="", cex.lab=1.3, cex.axis=1.3, cex.main=5, bty="n", xaxt="n", yaxt="n", cex=1.2, main=x, emphasize=which(hvg.info["orig.ident",]==x))
+dev.off()
+
+basal <- readRDS("Dat_selected_basal_cells.rds")
+basal <- RunPCA(object=basal, pc.genes=basal@var.genes, do.print=FALSE)
+
+pca.coor <- basal@dr$pca@cell.embeddings
+png("Plot_PC1_2.png")
+plotFeature2(pca.coor[,c(1,2)], value=basal@meta.data$orig.ident)
+dev.off()
+
+pc.num <- 3
+reso <- 0.2
+basal <- FindClusters(object=basal, reduction.type="pca", dims.use=1:pc.num, resolution=reso, print.output=0, force.recalc=T,save.SNN=TRUE)
+basal <- RunTSNE(object=basal, dims.use=1:pc.num, do.fast=TRUE)
+
+p2 <- TSNEPlot(object=basal, pt.size=1, do.return=T, do.label=T,label.size=5)+theme(axis.text=element_text(size=15), axis.ticks.length=unit(.25, "cm"), axis.title=element_text(size=18),legend.text=element_text(size=15))
+p3 <- TSNEPlot(object=basal, pt.size=1, group.by="orig.ident", do.return=T, label.size=5)+theme(axis.text=element_text(size=15), axis.ticks.length=unit(.25, "cm"), axis.title=element_text(size=18),legend.text=element_text(size=15))
+png(paste0("Plot_tSNE_res",reso,"_",pc.num,"PC.png"),width=1000, height=500)
+print(plot_grid(p2, p3, ncol=2, nrow=1))
+dev.off()
+saveRDS(basal, file="Dat_basal_lineage.rds")
+
+time.idx <- round(seq(from=1,to=max(time)+1,length=101))
+cell.types <- as.character(unique(basal@meta.data[,"cell.ident"]))[c(2,1,3,4,5)]
+int.number <- t(sapply(seq(100), function(i){
+	sample.idx <- names(which(time>=time.idx[i] & time<time.idx[i+1]))
+	sapply(cell.types, function(x){
+		sum(as.character(basal@meta.data[sample.idx,"cell.ident"])==x)
+	})
+}))
+n1 <- int.number[,"Basal cells"]+int.number[,"Differentiating basal cells"]
+int.number <- cbind(int.number[,1:3],n1)
+colnames(int.number)[ncol(int.number)] <- "Basal cells"
+int.freq <- t(t(int.number)/apply(int.number,2,sum))
+int.col <- c("#00883770","#a6dba070","#c2a5cf70","#7b329470")
+int.col <- c("#92224370", "#BD647470", "#564F9670", "#F0AA6A70")
+pdf("Plot_cluster_cell_number_per_interval-2.pdf")
+barplot(int.number[,1], col=int.col[1], border=NA)
+for(i in 2:length(int.col)){
+	barplot(int.number[,i], add=T, col=int.col[i], border=NA)
+}
+dev.off()
+int.stage <- apply(int.number, 1, which.max)
+stage.expr <- sapply(seq(4),function(i){
+	int.idx <- which(int.stage==i)
+	apply(int.expr[,int.idx],1,mean)
+})
+int.res <- list("int.expr"=int.expr, "int.k.expr"=int.k.expr, "stage.expr"=stage.expr, "int.time.idx"=time.idx, "int.cell.type.number"=int.number, "int.cell.type.frequency"=int.freq, "interval.stage.idx"=int.stage)
+saveRDS(int.res, file="Data_100pseudotime_interval.rds")
+
+# specific gene sets
+tgf.genes <- setdiff(grep("TGF", rownames(basal@data),value=T),c("PTGFRN","CTGF","PTGFR"))
+bmp.genes <- grep("BMP", rownames(basal@data),value=T)
+acvr.genes <- grep("ACV",rownames(basal@data),value=T)
+smad.genes <- grep("SMAD",rownames(basal@data),value=T)
+signal.genes <- c(tgf.genes, bmp.genes, acvr.genes, smad.genes, "NODAL", "NOG","CHRD")
+#signal.genes <- signal.genes[which(apply(int.k.expr[signal.genes,],1,sd)>0)]
+signal.genes <- signal.genes[which(apply(int.stage.expr[signal.genes,],1,sd)>0)]
+
+selected.genes <- signal.genes
+#scaled.expr <- t(scale(t(int.expr[selected.genes,])))
+int.expr <- int.res$int.expr
+int.stage.expr <- int.res$stage.expr
+normed.expr <- t(apply(int.expr[selected.genes,], 1, function(vec){
+	(vec-min(vec))/(max(vec)-min(vec))
+}))
+#max.int.idx <- apply(int.k.expr[selected.genes,],1,which.max)
+max.int.idx <- apply(int.stage.expr[selected.genes,],1,which.max)	
+sorted.expr <- normed.expr[order(max.int.idx, decreasing=T),]
+
+colors <- colorRampPalette(c("#f7f7f7","#969696","#252525"), space="rgb")(50)
+int.col <- c("#922243C0", "#BD6474C0", "#564F96C0", "#F0AA6AC0")
+gene.side.bar <- int.col[sort(max.int.idx, decreasing=T)]
+
+pdf("Plot_heatmap_TGF_BMP_SMAD_ACVR_NODAL_NOG_CHRD_expression-reverse.pdf")
+heatmap.2(sorted.expr,trace="none",density.info="none",scale="none",col=colors,labCol="",Colv=FALSE,Rowv=FALSE,dendrogram="none",RowSideColors=gene.side.bar)
 dev.off()
